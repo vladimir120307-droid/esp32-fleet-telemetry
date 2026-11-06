@@ -1,0 +1,16 @@
+{
+  "devices": 40,
+  "readings_generated": 57220,
+  "http_requests": 11864,
+  "lost_answers_simulated": 363,
+  "device_minutes_offline": 7792,
+  "wall_seconds": 18.6,
+  "readings_per_second": 3074,
+  "ingest_ms_p50": 20.1,
+  "ingest_ms_p95": 32.0,
+  "readings_stored": 57220,
+  "distinct_device_seq": 57220,
+  "duplicates_rejected": 1795,
+  "missing_readings": 0,
+  "rollup_row_count_matches": true
+}

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet telemetry</title>
+<style>
+  :root { --ink:#1b2430; --muted:#66707e; --line:#e1e5ea; --bg:#f4f5f7; --card:#fff; --good:#14713d; --bad:#b3341f; --warn:#a56a00; --accent:#1f5f99; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { background:#16202c; color:#fff; padding:14px 24px; display:flex; justify-content:space-between; align-items:baseline; gap:16px; flex-wrap:wrap; }
+  header b { font-size:17px; font-weight:600; }
+  header span { color:#aab4c0; }
+  main { padding:18px 24px 28px; max-width:1500px; margin:auto; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:14px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:12px 14px; }
+  .stat small { color:var(--muted); display:block; }
+  .stat strong { font-size:25px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:14px; margin-bottom:14px; }
+  h2 { font-size:14px; font-weight:600; margin:0 0 10px; }
+  #chart { width:100%; height:250px; display:block; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  th { text-align:left; color:var(--muted); font-weight:500; border-bottom:1px solid var(--line); padding:5px 8px; }
+  td { padding:5px 8px; border-bottom:1px solid #eef0f3; }
+  tr[data-id] { cursor:pointer; }
+  tr[data-id]:hover, tr.sel { background:#eef4fa; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+  .online .dot { background:var(--good); } .offline .dot { background:var(--warn); } .revoked .dot { background:var(--bad); }
+  #login { display:none; max-width:360px; margin:60px auto; }
+  input { width:100%; padding:8px; border:1px solid var(--line); border-radius:4px; margin:8px 0; }
+  button { padding:8px 14px; background:var(--accent); color:#fff; border:0; border-radius:4px; cursor:pointer; }
+  .scroll { overflow-x:auto; }
+  @media (max-width:640px) { main { padding:12px 16px; } header { padding:12px 16px; } }
+</style>
+</head>
+<body>
+<header><b>Fleet telemetry</b><span id="who"></span></header>
+<main>
+  <div id="login" class="panel">
+    <h2>Customer API key</h2>
+    <input id="key" type="password" autocomplete="off">
+    <button id="go">Open dashboard</button>
+  </div>
+  <div id="app" style="display:none">
+    <div class="stats" id="stats"></div>
+    <div class="panel"><h2 id="ctitle">Temperature</h2><svg id="chart" role="img"></svg></div>
+    <div class="panel"><h2>Devices</h2><div class="scroll"><table id="tbl"></table></div></div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const headers = () => { let k = null; try { k = sessionStorage.getItem('key'); } catch (e) {} return k ? { Authorization: 'Bearer ' + k } : {}; };
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const num = n => Number(n).toLocaleString('en-US');
+function ago(ts) { if (!ts) return 'never'; const m = Math.max(0, Math.round((Date.now()/1000 - ts)/60)); return m < 60 ? m + ' min ago' : (m/60).toFixed(1) + ' h ago'; }
+async function load() {
+  const r = await fetch('api/fleet', { headers: headers() });
+  if (r.status === 401) { $('login').style.display = 'block'; $('app').style.display = 'none'; return; }
+  const d = await r.json();
+  $('login').style.display = 'none'; $('app').style.display = 'block';
+  $('who').textContent = d.customer;
+  const s = d.summary;
+  $('stats').innerHTML = [['Devices online', s.online + ' / ' + s.devices], ['Readings stored', num(s.readings)], ['Resends rejected as duplicates', num(s.duplicates_rejected)], ['Missing readings', num(s.gaps)]]
+    .map(([k, v]) => `<div class="stat"><small>${k}</small><strong>${v}</strong></div>`).join('');
+  $('tbl').innerHTML = '<tr><th>Device</th><th>Status</th><th>Last reading</th><th>WiFi</th><th>Firmware</th><th>Stored</th><th>Duplicates</th><th>Gaps</th></tr>' +
+    d.devices.map(x => `<tr data-id="${esc(x.id)}" class="${esc(x.status)}"><td>${esc(x.label)}</td><td><span class="dot"></span>${esc(x.status)}</td><td>${ago(x.last_ts)}</td><td>${x.rssi ?? ''} dBm</td><td>${esc(x.firmware)}</td><td>${num(x.stored)}</td><td>${num(x.duplicates_rejected)}</td><td>${x.gaps}</td></tr>`).join('');
+  document.querySelectorAll('tr[data-id]').forEach(tr => tr.onclick = () => show(tr.dataset.id));
+  const first = d.devices.find(x => x.status === 'online') || d.devices[0];
+  if (first) show(first.id);
+}
+async function show(id) {
+  document.querySelectorAll('tr.sel').forEach(t => t.classList.remove('sel'));
+  const row = document.querySelector(`tr[data-id="${CSS.escape(id)}"]`); if (row) row.classList.add('sel');
+  const r = await fetch(`api/devices/${encodeURIComponent(id)}/series?hours=24`, { headers: headers() });
+  const pts = (await r.json()).points;
+  $('ctitle').textContent = `Temperature, last 24 hours: ${id} (minute rollups, min to max band and average)`;
+  draw(pts);
+}
+function draw(pts) {
+  const svg = $('chart'), W = svg.clientWidth || 1200, H = svg.clientHeight || 250, L = 44, R = 12, T = 8, B = 24;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  if (!pts.length) { svg.innerHTML = ''; return; }
+  const t0 = pts[0].t, t1 = pts[pts.length - 1].t || t0 + 1;
+  const lo = Math.floor(Math.min(...pts.map(p => p.lo))), hi = Math.ceil(Math.max(...pts.map(p => p.hi)));
+  const x = t => L + (t - t0) / Math.max(1, t1 - t0) * (W - L - R), y = v => T + (hi - v) / Math.max(1, hi - lo) * (H - T - B);
+  let g = '';
+  for (let v = lo; v <= hi; v += Math.max(1, Math.ceil((hi - lo) / 5))) g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#e8ebef"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end" fill="#66707e" font-size="11">${v}°</text>`;
+  for (let i = 0; i <= 6; i++) { const t = t0 + (t1 - t0) * i / 6; const dt = new Date(t * 1000); g += `<text x="${x(t)}" y="${H - 6}" text-anchor="middle" fill="#66707e" font-size="11">${String(dt.getUTCHours()).padStart(2,'0')}:${String(dt.getUTCMinutes()).padStart(2,'0')}</text>`; }
+  const band = pts.map(p => `${x(p.t)},${y(p.hi)}`).join(' ') + ' ' + pts.slice().reverse().map(p => `${x(p.t)},${y(p.lo)}`).join(' ');
+  const line = pts.map(p => `${x(p.t)},${y(p.avg)}`).join(' ');
+  svg.innerHTML = g + `<polygon points="${band}" fill="#1f5f99" opacity=".16"/><polyline points="${line}" fill="none" stroke="#1f5f99" stroke-width="1.6"/>`;
+}
+$('go').onclick = () => { try { sessionStorage.setItem('key', $('key').value); } catch (e) {} load(); };
+load();
+</script>
+</body>
+</html>
